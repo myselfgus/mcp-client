@@ -1,0 +1,37 @@
+{
+  "_worker-entry-CnLgc6nr.js": {
+    "file": "assets/worker-entry-CnLgc6nr.js",
+    "name": "worker-entry",
+    "dynamicImports": [
+      "node_modules/ai/dist/index.mjs",
+      "node_modules/mimetext/dist/mimetext.node.es.js"
+    ]
+  },
+  "node_modules/ai/dist/index.mjs": {
+    "file": "assets/index-DBoY5ByM.js",
+    "name": "index",
+    "src": "node_modules/ai/dist/index.mjs",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-CnLgc6nr.js"
+    ]
+  },
+  "node_modules/mimetext/dist/mimetext.node.es.js": {
+    "file": "assets/mimetext.node.es-Dfry_wcv.js",
+    "name": "mimetext.node.es",
+    "src": "node_modules/mimetext/dist/mimetext.node.es.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-CnLgc6nr.js"
+    ]
+  },
+  "virtual:cloudflare/worker-entry": {
+    "file": "index.js",
+    "name": "index",
+    "src": "virtual:cloudflare/worker-entry",
+    "isEntry": true,
+    "imports": [
+      "_worker-entry-CnLgc6nr.js"
+    ]
+  }
+}
