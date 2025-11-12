@@ -1,5 +1,9 @@
 import { Agent, type AgentNamespace, routeAgentRequest } from "agents";
 import { MCPClientManager } from "agents/mcp/client";
+import { MCPClientRPC } from "./rpc";
+
+// Export RPC class for service bindings
+export { MCPClientRPC };
 
 type Env = {
 	MyAgent: AgentNamespace<MyAgent>;

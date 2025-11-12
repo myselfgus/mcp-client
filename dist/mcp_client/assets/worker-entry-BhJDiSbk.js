@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 const hrtime$1 = /* @__PURE__ */ Object.assign(function hrtime(startTime) {
   const now = Date.now();
   const seconds = Math.trunc(now / 1e3);
@@ -14308,7 +14308,7 @@ var MCPClientManager = class {
   */
   async connect(url, options = {}) {
     if (!this.jsonSchema) {
-      const { jsonSchema } = await import("./index-DBoY5ByM.js");
+      const { jsonSchema } = await import("./index-BHC_SQsM.js");
       this.jsonSchema = jsonSchema;
     }
     const id = options.reconnect?.id ?? nanoid(8);
@@ -16173,7 +16173,7 @@ var Agent = class Agent2 extends Server {
     return this._tryCatch(async () => {
       const agentName = camelCaseToKebabCase$1(this._ParentClass.name);
       const agentId = this.name;
-      const { createMimeMessage } = await import("./mimetext.node.es-Dfry_wcv.js");
+      const { createMimeMessage } = await import("./mimetext.node.es-mltYkXKF.js");
       const msg = createMimeMessage();
       msg.setSender({
         addr: email.to,
@@ -16750,6 +16750,226 @@ var StreamingResponse = class {
     this._connection.send(JSON.stringify(response));
   }
 };
+class MCPClientRPC extends WorkerEntrypoint {
+  /**
+   * Connect to an MCP server
+   * @param serverId MCP server ID from meta-mcp
+   * @param serverUrl URL of the MCP server
+   * @param serverName Name of the MCP server
+   */
+  async connectToServer(serverId, serverUrl, serverName) {
+    try {
+      const connectionId = nanoid();
+      await this.env.DB.prepare(`
+				INSERT INTO mcp_connections (id, server_id, connection_url, status, created_at)
+				VALUES (?, ?, ?, ?, ?)
+			`).bind(
+        connectionId,
+        serverId,
+        serverUrl,
+        "connecting",
+        Date.now()
+      ).run();
+      const agentId = this.env.MyAgent.idFromName(`mcp-client-${serverId}`);
+      const agent = this.env.MyAgent.get(agentId);
+      const response = await agent.fetch(`${this.env.HOST}/add-mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: serverName,
+          url: serverUrl
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Failed to add MCP server to agent");
+      }
+      const toolsResponse = await agent.fetch(`${this.env.HOST}/mcp/${serverName}/tools`);
+      let tools = [];
+      if (toolsResponse.ok) {
+        const toolsData = await toolsResponse.json();
+        tools = toolsData.tools || [];
+      }
+      await this.env.DB.prepare(`
+				UPDATE mcp_connections
+				SET status = 'connected', last_ping = ?
+				WHERE id = ?
+			`).bind(Date.now(), connectionId).run();
+      for (const tool of tools) {
+        await this.env.DB.prepare(`
+					INSERT INTO mcp_tools (id, server_id, tool_name, description, input_schema)
+					VALUES (?, ?, ?, ?, ?)
+				`).bind(
+          nanoid(),
+          serverId,
+          tool.name,
+          tool.description || "",
+          JSON.stringify(tool.inputSchema || {})
+        ).run();
+      }
+      return {
+        success: true,
+        connectionId,
+        tools,
+        serverName
+      };
+    } catch (error) {
+      console.error("Failed to connect to MCP server:", error);
+      await this.env.DB.prepare(`
+				UPDATE mcp_connections
+				SET status = 'error', error_message = ?
+				WHERE server_id = ? AND connection_url = ?
+			`).bind(
+        error instanceof Error ? error.message : "Unknown error",
+        serverId,
+        serverUrl
+      ).run();
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      };
+    }
+  }
+  /**
+   * Call a tool on a connected MCP server
+   * @param connectionId Connection ID from connectToServer
+   * @param toolName Name of the tool to call
+   * @param args Arguments for the tool
+   */
+  async callTool(connectionId, toolName, args) {
+    try {
+      const connection = await this.env.DB.prepare(`
+				SELECT * FROM mcp_connections WHERE id = ?
+			`).bind(connectionId).first();
+      if (!connection) {
+        return {
+          success: false,
+          error: "Connection not found"
+        };
+      }
+      if (connection.status !== "connected") {
+        return {
+          success: false,
+          error: `Connection is ${connection.status}`
+        };
+      }
+      const server2 = await this.env.DB.prepare(`
+				SELECT * FROM mcp_servers WHERE id = ?
+			`).bind(connection.server_id).first();
+      if (!server2) {
+        return {
+          success: false,
+          error: "Server not found"
+        };
+      }
+      const agentId = this.env.MyAgent.idFromName(`mcp-client-${connection.server_id}`);
+      const agent = this.env.MyAgent.get(agentId);
+      const response = await agent.fetch(`${this.env.HOST}/mcp/${server2.name}/tools/${toolName}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args)
+      });
+      if (!response.ok) {
+        throw new Error("Tool call failed");
+      }
+      const result = await response.json();
+      await this.env.DB.prepare(`
+				UPDATE mcp_connections
+				SET last_ping = ?
+				WHERE id = ?
+			`).bind(Date.now(), connectionId).run();
+      return {
+        success: true,
+        result
+      };
+    } catch (error) {
+      console.error("Failed to call tool:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      };
+    }
+  }
+  /**
+   * List all active connections
+   */
+  async listConnections() {
+    try {
+      const result = await this.env.DB.prepare(`
+				SELECT
+					c.*,
+					s.name as server_name,
+					s.description as server_description
+				FROM mcp_connections c
+				LEFT JOIN mcp_servers s ON c.server_id = s.id
+				ORDER BY c.created_at DESC
+				LIMIT 100
+			`).all();
+      return {
+        success: true,
+        connections: result.results || []
+      };
+    } catch (error) {
+      console.error("Failed to list connections:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      };
+    }
+  }
+  /**
+   * Disconnect from MCP server
+   * @param connectionId Connection ID to disconnect
+   */
+  async disconnectFromServer(connectionId) {
+    try {
+      await this.env.DB.prepare(`
+				UPDATE mcp_connections
+				SET status = 'disconnected'
+				WHERE id = ?
+			`).bind(connectionId).run();
+      return {
+        success: true,
+        connectionId
+      };
+    } catch (error) {
+      console.error("Failed to disconnect:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      };
+    }
+  }
+  /**
+   * Get available tools for a connection
+   * @param connectionId Connection ID
+   */
+  async getServerTools(connectionId) {
+    try {
+      const connection = await this.env.DB.prepare(`
+				SELECT * FROM mcp_connections WHERE id = ?
+			`).bind(connectionId).first();
+      if (!connection) {
+        return {
+          success: false,
+          error: "Connection not found"
+        };
+      }
+      const result = await this.env.DB.prepare(`
+				SELECT * FROM mcp_tools WHERE server_id = ?
+			`).bind(connection.server_id).all();
+      return {
+        success: true,
+        tools: result.results || []
+      };
+    } catch (error) {
+      console.error("Failed to get tools:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      };
+    }
+  }
+}
 class MyAgent extends Agent {
   constructor() {
     super(...arguments);
@@ -16773,8 +16993,9 @@ const server = {
 };
 const workerEntry = server ?? {};
 export {
-  MyAgent as M,
+  MCPClientRPC as M,
   ZodFirstPartyTypeKind as Z,
+  MyAgent as a,
   commonjsGlobal as c,
   getDefaultExportFromCjs as g,
   workerEntry as w
