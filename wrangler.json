@@ -31,7 +31,9 @@
   "services": [
     {
       "binding": "META_MCP",
-      "service": "meta-mcp"
+      "service": "meta-mcp",
+      "environment": "production",
+      "entrypoint": "MetaMCPRPC"
     }
   ],
   "vars": {
